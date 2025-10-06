@@ -1,0 +1,277 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-stress-100rps
+  namespace: prod
+  labels:
+    app: k6-stress-test
+    rps: "100"
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: k6-stress-test
+        rps: "100"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: k6-stress-test
+      shareProcessNamespace: true
+      nodeSelector:
+        workload: k6
+      tolerations:
+      - key: workload
+        operator: Equal
+        value: k6
+        effect: NoSchedule
+      containers:
+      - name: k6
+        image: grafana/k6:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting K6 stress test: 100 RPS"
+            echo "Test duration: ${DURATION}"
+            echo "Base URL: ${BASE_URL}"
+            echo ""
+
+            # Discover resources before test starts
+            echo "Discovering deployments and nodepools..."
+            /scripts/discover-resources.sh
+
+            # Calculate when to trigger metrics collection
+            DURATION_SECONDS=$(echo ${DURATION} | sed 's/m/*60/' | sed 's/s//' | bc)
+            METRICS_DELAY=$((DURATION_SECONDS - 10))
+
+            # Signal metrics collector when to start
+            (sleep ${METRICS_DELAY} && touch /shared/collect-metrics) &
+
+            # Run k6 test
+            k6 run /scripts/stress-test.js
+
+            # Wait for metrics collection to complete
+            while [ ! -f /shared/metrics-done ]; do
+              sleep 1
+            done
+
+            echo ""
+            echo "=== Resource Metrics ==="
+            cat /shared/metrics.json
+            echo ""
+        env:
+        - name: TARGET_RPS
+          value: "100"
+        - name: DURATION
+          value: "2m"
+        - name: BASE_URL
+          value: "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local"
+        - name: URL_DATA_PATH
+          value: "/data/urls-1.json"
+        - name: NAMESPACE
+          value: "prod"
+        - name: APP_LABEL
+          value: "my-app"
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "512Mi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+        volumeMounts:
+        - name: k6-scripts
+          mountPath: /scripts
+        - name: k6-data
+          mountPath: /data
+        - name: shared
+          mountPath: /shared
+      - name: metrics-collector
+        image: alpine/k8s:1.28.0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Metrics collector waiting for signal..."
+
+            # Wait for signal to collect metrics
+            while [ ! -f /shared/collect-metrics ]; do
+              sleep 1
+            done
+
+            echo "Signal received, collecting metrics in 1 second..."
+            sleep 1
+
+            # Run metrics collection script
+            /scripts/collect-metrics.sh > /shared/metrics.json 2>&1
+
+            # Signal completion
+            touch /shared/metrics-done
+
+            echo "Metrics collection completed"
+        env:
+        - name: NAMESPACE
+          value: "prod"
+        - name: APP_LABEL
+          value: "my-app"
+        volumeMounts:
+        - name: k6-scripts
+          mountPath: /scripts
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: k6-scripts
+        configMap:
+          name: k6-stress-script
+          defaultMode: 0755
+      - name: k6-data
+        configMap:
+          name: k6-urls-data
+      - name: shared
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k6-stress-test
+  namespace: prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader
+  namespace: prod
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader
+  namespace: prod
+subjects:
+- kind: ServiceAccount
+  name: k6-stress-test
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: k6-stress-test
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader-kube-system
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k6-node-metrics-reader
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k6-node-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: k6-stress-test
+  namespace: prod
+roleRef:
+  kind: ClusterRole
+  name: k6-node-metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: k6-stress-test
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader-kube-system
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-ingress-nginx
+  namespace: ingress-nginx
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader-ingress-nginx
+  namespace: ingress-nginx
+subjects:
+- kind: ServiceAccount
+  name: k6-stress-test
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader-ingress-nginx
+  apiGroup: rbac.authorization.k8s.io

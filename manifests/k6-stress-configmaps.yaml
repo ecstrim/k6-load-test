@@ -1,0 +1,310 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-stress-script
+  namespace: prod
+  labels:
+    app: k6-stress-test
+data:
+  stress-test.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    import { Rate, Trend, Counter } from 'k6/metrics';
+    import { SharedArray } from 'k6/data';
+    import exec from 'k6/execution';
+
+    // Custom metrics
+    const errorRate = new Rate('errors');
+    const successRate = new Rate('success');
+    const requestDuration = new Trend('request_duration');
+    const totalRequests = new Counter('total_requests');
+
+    // Load URLs from JSON file
+    const urls = new SharedArray('urls', function() {
+      const urlData = JSON.parse(open(__ENV.URL_DATA_PATH || '/k6-data/urls-1.json'));
+      return urlData.urls;
+    });
+
+    // Test configuration from environment variables
+    const TARGET_RPS = parseInt(__ENV.TARGET_RPS || '50');
+    const DURATION = __ENV.DURATION || '2m';
+    const BASE_URL = __ENV.BASE_URL || 'https://your-domain.com';
+
+    // Calculate VUs needed for target RPS
+    // Assuming ~250ms response time = ~4 req/s per VU
+    const ESTIMATED_REQ_PER_VU_PER_SEC = 4;
+    const CALCULATED_VUS = Math.ceil(TARGET_RPS / ESTIMATED_REQ_PER_VU_PER_SEC);
+
+    export const options = {
+      scenarios: {
+        constant_rps: {
+          executor: 'constant-arrival-rate',
+          rate: TARGET_RPS,
+          timeUnit: '1s',
+          duration: DURATION,
+          preAllocatedVUs: CALCULATED_VUS,
+          maxVUs: Math.max(CALCULATED_VUS * 9, 60), // 3x more headroom (9x total), min 60 VUs
+        },
+      },
+      thresholds: {
+        'http_req_duration{expected_response:true}': ['p(95)<2000'],
+        'errors': ['rate<0.02'],
+        'http_req_failed': ['rate<0.02'],
+      },
+      insecureSkipTLSVerify: true,
+      noConnectionReuse: false,
+      userAgent: 'K6-StressTest/1.0',
+    };
+
+    export function setup() {
+      console.log(`=== K6 Stress Test Configuration ===`);
+      console.log(`Target RPS: ${TARGET_RPS}`);
+      console.log(`Duration: ${DURATION}`);
+      console.log(`Base URL: ${BASE_URL}`);
+      console.log(`URLs to test: ${urls.length}`);
+      console.log(`Calculated VUs: ${CALCULATED_VUS}`);
+      console.log(`Test start time: ${new Date().toISOString()}`);
+      console.log(`====================================`);
+
+      return {
+        startTime: new Date().toISOString(),
+        targetRps: TARGET_RPS,
+        duration: DURATION,
+      };
+    }
+
+    export default function(data) {
+      const urlPath = urls[Math.floor(Math.random() * urls.length)];
+      const url = `${BASE_URL}${urlPath}`;
+
+      const params = {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Host': 'your-domain.com',
+        },
+        timeout: '30s',
+        tags: {
+          name: urlPath,
+        },
+      };
+
+      const response = http.get(url, params);
+
+      totalRequests.add(1);
+      requestDuration.add(response.timings.duration);
+
+      const success = check(response, {
+        'status is 200': (r) => r.status === 200,
+        'response time < 2000ms': (r) => r.timings.duration < 2000,
+        'response has body': (r) => r.body && r.body.length > 0,
+      });
+
+      if (success) {
+        successRate.add(1);
+        errorRate.add(0);
+      } else {
+        successRate.add(0);
+        errorRate.add(1);
+        console.error(`Request failed: ${url} - Status: ${response.status} - Duration: ${response.timings.duration}ms`);
+      }
+    }
+
+    export function teardown(data) {
+      console.log(`\n=== Test Completed ===`);
+      console.log(`Test end time: ${new Date().toISOString()}`);
+      console.log(`Start time: ${data.startTime}`);
+      console.log(`Target RPS: ${data.targetRps}`);
+      console.log(`Duration: ${data.duration}`);
+      console.log(`======================\n`);
+    }
+
+  discover-resources.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    NAMESPACE="${NAMESPACE:-prod}"
+    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    echo "=== Resource Discovery ==="
+    echo "Timestamp: ${TIMESTAMP}"
+    echo "Namespace: ${NAMESPACE}"
+    echo ""
+
+    # Discover all deployments in the namespace
+    echo "--- Deployments ---"
+    DEPLOYMENTS=$(kubectl get deployments -n "${NAMESPACE}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+    if [ -n "$DEPLOYMENTS" ]; then
+        echo "$DEPLOYMENTS"
+    else
+        echo "No deployments found"
+    fi
+
+    # Discover nodepools (node labels)
+    echo ""
+    echo "--- Nodepools (unique agentpool labels) ---"
+    NODEPOOLS=$(kubectl get nodes -o jsonpath='{.items[*].metadata.labels.agentpool}' 2>/dev/null | tr ' ' '\n' | sort -u | grep -v '^$' || echo "")
+
+    if [ -n "$NODEPOOLS" ]; then
+        echo "$NODEPOOLS"
+    else
+        echo "No agentpool labels found, checking kubernetes.io/hostname..."
+        # Fallback: get all node names
+        NODEPOOLS=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+        echo "$NODEPOOLS"
+    fi
+
+    # Save to shared volume
+    echo "$DEPLOYMENTS" > /shared/deployments.txt
+    echo "$NODEPOOLS" > /shared/nodepools.txt
+
+    echo ""
+    echo "=== Resource Discovery Complete ==="
+
+  collect-metrics.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    NAMESPACE="${NAMESPACE:-prod}"
+    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    echo "=== Resource Metrics Collection ==="
+    echo "Timestamp: ${TIMESTAMP}"
+    echo "Namespace: ${NAMESPACE}"
+    echo ""
+
+    # Read discovered resources
+    DEPLOYMENTS=$(cat /shared/deployments.txt 2>/dev/null || echo "")
+    NODEPOOLS=$(cat /shared/nodepools.txt 2>/dev/null || echo "")
+
+    # Collect metrics for all deployment pods
+    echo "--- Deployment Pod Metrics ---"
+    DEPLOYMENT_METRICS_JSON="{"
+
+    if [ -n "$DEPLOYMENTS" ]; then
+        for DEPLOY in $DEPLOYMENTS; do
+            echo "Deployment: $DEPLOY"
+            POD_METRICS=$(kubectl top pods -n "${NAMESPACE}" -l "app=${DEPLOY}" --no-headers 2>/dev/null || echo "")
+
+            if [ -z "$POD_METRICS" ]; then
+                # Try alternative label
+                POD_METRICS=$(kubectl top pods -n "${NAMESPACE}" -l "app.kubernetes.io/name=${DEPLOY}" --no-headers 2>/dev/null || echo "")
+            fi
+
+            if [ -n "$POD_METRICS" ]; then
+                echo "$POD_METRICS"
+                METRICS_JSON=$(echo "$POD_METRICS" | awk '{
+                    printf "{\"pod\":\"%s\",\"cpu\":\"%s\",\"memory\":\"%s\"},", $1, $2, $3
+                }' | sed 's/,$//')
+                DEPLOYMENT_METRICS_JSON="${DEPLOYMENT_METRICS_JSON}\"${DEPLOY}\":[${METRICS_JSON}],"
+            else
+                DEPLOYMENT_METRICS_JSON="${DEPLOYMENT_METRICS_JSON}\"${DEPLOY}\":[],"
+            fi
+        done
+        DEPLOYMENT_METRICS_JSON=$(echo "$DEPLOYMENT_METRICS_JSON" | sed 's/,$//')
+    fi
+    DEPLOYMENT_METRICS_JSON="${DEPLOYMENT_METRICS_JSON}}"
+
+    echo ""
+    echo "--- CoreDNS Metrics ---"
+    COREDNS_METRICS=$(kubectl top pods -n kube-system -l "k8s-app=kube-dns" --no-headers 2>/dev/null || echo "")
+
+    if [ -z "$COREDNS_METRICS" ]; then
+        COREDNS_METRICS_JSON="[]"
+    else
+        COREDNS_METRICS_JSON=$(echo "$COREDNS_METRICS" | awk '{
+            printf "{\"pod\":\"%s\",\"cpu\":\"%s\",\"memory\":\"%s\"},\n", $1, $2, $3
+        }' | sed '$ s/,$//')
+        COREDNS_METRICS_JSON="[${COREDNS_METRICS_JSON}]"
+        echo "$COREDNS_METRICS"
+    fi
+
+    echo ""
+    echo "--- Ingress Controller Metrics ---"
+    INGRESS_METRICS=$(kubectl top pods -n ingress-nginx -l "app.kubernetes.io/component=controller" --no-headers 2>/dev/null || echo "")
+
+    if [ -z "$INGRESS_METRICS" ]; then
+        INGRESS_METRICS_JSON="[]"
+    else
+        INGRESS_METRICS_JSON=$(echo "$INGRESS_METRICS" | awk '{
+            printf "{\"pod\":\"%s\",\"cpu\":\"%s\",\"memory\":\"%s\"},\n", $1, $2, $3
+        }' | sed '$ s/,$//')
+        INGRESS_METRICS_JSON="[${INGRESS_METRICS_JSON}]"
+        echo "$INGRESS_METRICS"
+    fi
+
+    echo ""
+    echo "--- Nodepool Metrics ---"
+    NODEPOOL_METRICS_JSON="{"
+
+    if [ -n "$NODEPOOLS" ]; then
+        for POOL in $NODEPOOLS; do
+            echo "Nodepool: $POOL"
+
+            # Get nodes in this pool
+            POOL_NODES=$(kubectl get nodes -l "agentpool=${POOL}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+            if [ -z "$POOL_NODES" ]; then
+                # Fallback: treat POOL as node name directly
+                POOL_NODES="$POOL"
+            fi
+
+            NODE_METRICS=""
+            for NODE in $POOL_NODES; do
+                NODE_METRIC=$(kubectl top node "$NODE" --no-headers 2>/dev/null || echo "")
+                if [ -n "$NODE_METRIC" ]; then
+                    NODE_METRICS="${NODE_METRICS}${NODE_METRIC}\n"
+                fi
+            done
+
+            if [ -n "$NODE_METRICS" ]; then
+                echo -e "$NODE_METRICS"
+                METRICS_JSON=$(echo -e "$NODE_METRICS" | awk '{
+                    printf "{\"node\":\"%s\",\"cpu\":\"%s\",\"cpu_percent\":\"%s\",\"memory\":\"%s\",\"memory_percent\":\"%s\"},", $1, $2, $3, $4, $5
+                }' | sed 's/,$//')
+                NODEPOOL_METRICS_JSON="${NODEPOOL_METRICS_JSON}\"${POOL}\":[${METRICS_JSON}],"
+            else
+                NODEPOOL_METRICS_JSON="${NODEPOOL_METRICS_JSON}\"${POOL}\":[],"
+            fi
+        done
+        NODEPOOL_METRICS_JSON=$(echo "$NODEPOOL_METRICS_JSON" | sed 's/,$//')
+    fi
+    NODEPOOL_METRICS_JSON="${NODEPOOL_METRICS_JSON}}"
+
+    echo ""
+    echo "--- JSON Output ---"
+    cat <<EOF
+    {
+      "timestamp": "${TIMESTAMP}",
+      "namespace": "${NAMESPACE}",
+      "deployment_metrics": ${DEPLOYMENT_METRICS_JSON},
+      "coredns_metrics": ${COREDNS_METRICS_JSON},
+      "ingress_controller_metrics": ${INGRESS_METRICS_JSON},
+      "nodepool_metrics": ${NODEPOOL_METRICS_JSON}
+    }
+    EOF
+
+    echo ""
+    echo "=== Metrics Collection Complete ==="
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-urls-data
+  namespace: prod
+  labels:
+    app: k6-stress-test
+data:
+  urls-1.json: |
+    {
+      "urls": [
+        "/api/endpoint",
+        "/products",
+        "/health"
+      ]
+    }

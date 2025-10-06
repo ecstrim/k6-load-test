@@ -1,0 +1,7 @@
+{
+  "urls": [
+    "/api/endpoint",
+    "/products",
+    "/health"
+  ]
+}

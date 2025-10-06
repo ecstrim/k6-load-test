@@ -1,0 +1,5 @@
+# Log files generated during test runs
+logs/*.log
+
+# Keep the logs directory but ignore log files
+!logs/.gitkeep
