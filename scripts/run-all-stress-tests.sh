@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RPS_LEVELS="50 100 150 200 300 400 500 750 1000"
+RPS_LEVELS="5 10 50 100 150 200 300 400 500 750 1000 1500"
 DELAY_BETWEEN_TESTS=30  # seconds
 
 # Colors for output
@@ -60,7 +60,7 @@ for RPS in $RPS_LEVELS; do
     fi
 
     # Wait between tests (except after the last one)
-    if [ "$RPS" != "1000" ]; then
+    if [ "$RPS" != "1500" ]; then
         log_info "Waiting ${DELAY_BETWEEN_TESTS}s before next test..."
         sleep ${DELAY_BETWEEN_TESTS}
     fi

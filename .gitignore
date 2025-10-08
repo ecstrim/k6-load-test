@@ -4,4 +4,8 @@ logs/*.log
 # Keep the logs directory but ignore log files
 !logs/.gitkeep
 
+# Enhanced implementation files (not part of simple implementation)
 .claude/
+web-ui/
+config/
+src/

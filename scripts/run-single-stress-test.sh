@@ -34,12 +34,12 @@ log_warn() {
 # Validate input
 if [ $# -ne 1 ]; then
     log_error "Usage: $0 <RPS>"
-    log_info "Available RPS levels: 50, 100, 150, 200, 300, 400, 500, 750, 1000, 1500"
+    log_info "Available RPS levels: 5, 10, 50, 100, 150, 200, 300, 400, 500, 750, 1000, 1500"
     exit 1
 fi
 
 RPS=$1
-VALID_RPS="50 100 150 200 300 400 500 750 1000 1500"
+VALID_RPS="5 10 50 100 150 200 300 400 500 750 1000 1500"
 
 if ! echo "$VALID_RPS" | grep -wq "$RPS"; then
     log_error "Invalid RPS level: $RPS"
@@ -60,7 +60,7 @@ log_info ""
 
 # Apply ConfigMaps if they don't exist
 log_info "Ensuring ConfigMaps are deployed..."
-kubectl apply -f "${MANIFESTS_DIR}/configmaps/k6-stress-configmaps.yaml" -n ${NAMESPACE} 2>&1 | tee -a "${LOG_FILE}"
+kubectl apply -f "${MANIFESTS_DIR}/k6-stress-configmaps.yaml" -n ${NAMESPACE} 2>&1 | tee -a "${LOG_FILE}"
 
 # Apply RBAC if it doesn't exist (from the 50rps manifest)
 log_info "Ensuring RBAC is configured..."

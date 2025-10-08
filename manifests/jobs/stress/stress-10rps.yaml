@@ -1,11 +1,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: k6-stress-100rps
+  name: k6-stress-10rps
   namespace: prod
   labels:
     app: k6-stress-test
-    rps: "100"
+    rps: "10"
 spec:
   parallelism: 1
   completions: 1
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app: k6-stress-test
-        rps: "100"
+        rps: "10"
     spec:
       restartPolicy: Never
       serviceAccountName: k6-stress-test
@@ -33,7 +33,7 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
-            echo "Starting K6 stress test: 100 RPS"
+            echo "Starting K6 stress test: 10 RPS"
             echo "Test duration: ${DURATION}"
             echo "Base URL: ${BASE_URL}"
             echo ""
@@ -70,7 +70,7 @@ spec:
             echo ""
         env:
         - name: TARGET_RPS
-          value: "100"
+          value: "10"
         - name: DURATION
           value: "2m"
         - name: BASE_URL
@@ -83,11 +83,11 @@ spec:
           value: "my-app"
         resources:
           requests:
-            cpu: "1000m"
-            memory: "512Mi"
+            cpu: "100m"
+            memory: "256Mi"
           limits:
-            cpu: "2000m"
-            memory: "2Gi"
+            cpu: "500m"
+            memory: "1Gi"
         volumeMounts:
         - name: k6-scripts
           mountPath: /scripts
@@ -164,6 +164,19 @@ rules:
   verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: k6-metrics-reader
@@ -176,19 +189,6 @@ roleRef:
   kind: Role
   name: k6-metrics-reader
   apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: k6-metrics-reader-kube-system
-  namespace: kube-system
-rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods"]
-  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

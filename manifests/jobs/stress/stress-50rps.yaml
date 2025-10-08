@@ -43,7 +43,14 @@ spec:
             /scripts/discover-resources.sh
 
             # Calculate when to trigger metrics collection
-            DURATION_SECONDS=$(echo ${DURATION} | sed 's/m/*60/' | sed 's/s//' | bc)
+            # Parse duration (supports formats like "2m", "120s")
+            if [[ ${DURATION} =~ ^([0-9]+)m$ ]]; then
+              DURATION_SECONDS=$((${BASH_REMATCH[1]} * 60))
+            elif [[ ${DURATION} =~ ^([0-9]+)s$ ]]; then
+              DURATION_SECONDS=${BASH_REMATCH[1]}
+            else
+              DURATION_SECONDS=120  # Default to 120 seconds
+            fi
             METRICS_DELAY=$((DURATION_SECONDS - 10))
 
             # Signal metrics collector when to start
