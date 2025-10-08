@@ -1,4 +1,35 @@
-# K6 Stress Test Package
+# K6 Load Testing Framework
+
+Powerful, flexible Kubernetes-based load testing framework using Grafana K6.
+
+---
+
+## 🚀 **NEW: Version 2.0 Available!**
+
+**v2.0 is a major redesign** with improved architecture and new features:
+
+✨ **What's New:**
+- **Parameterized deployment** - Single template replaces 12 manifests
+- **Central configuration** - All settings in `config.yaml`
+- **4 test scenarios** - Stress, Spike, Soak, and Load tests
+- **Result persistence** - Store and compare test results over time
+- **Automated reporting** - Generate markdown reports with trends
+- **Smart resource allocation** - Auto-sizing based on RPS
+- **Enhanced CLI** - Better scripts with comprehensive options
+
+📖 **[Read v2.0 Documentation →](README-v2.md)**
+
+```bash
+# Quick start with v2.0
+./scripts/v2/deploy-test.sh --type stress --rps 100 --wait
+./scripts/v2/deploy-test.sh --type spike --rps 50 --wait
+```
+
+**Note:** v1.0 (below) continues to work. Both versions coexist.
+
+---
+
+## v1.0 Documentation
 
 Portable K6 stress testing suite for Kubernetes clusters. Tests ingress capacity at various RPS (Requests Per Second) levels with automated metrics collection.
 

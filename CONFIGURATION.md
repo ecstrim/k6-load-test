@@ -1,6 +1,38 @@
 # Configuration Guide
 
-This guide explains how to configure the K6 stress test package for your Kubernetes cluster.
+This guide explains how to configure the K6 load testing framework for your Kubernetes cluster.
+
+---
+
+## 🚀 **NEW: Version 2.0 Configuration**
+
+**v2.0 uses central configuration** via `config.yaml` instead of editing individual manifests.
+
+**Benefits:**
+- All settings in one file
+- No need to edit 12+ manifest files
+- Environment-specific configs
+- Easier customization
+
+📖 **[See v2.0 Documentation →](README-v2.md)** for the new configuration approach.
+
+**Quick config example (v2.0):**
+```yaml
+# config.yaml
+test:
+  target:
+    baseUrl: "http://your-service.svc.cluster.local"
+    appLabel: "your-app"
+    namespace: "prod"
+```
+
+Then deploy: `./scripts/v2/deploy-test.sh --type stress --rps 100`
+
+---
+
+## v1.0 Configuration Guide
+
+This guide explains how to configure the K6 stress test package (v1.0) for your Kubernetes cluster.
 
 ## 📋 Required Configuration
 
