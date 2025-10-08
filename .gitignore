@@ -4,6 +4,14 @@ logs/*.log
 # Keep the logs directory but ignore log files
 !logs/.gitkeep
 
+# Test results and reports (v2.0)
+results/*.json
+reports/*.md
+
+# Keep directories but ignore contents
+!results/.gitkeep
+!reports/.gitkeep
+
 # Enhanced implementation files (not part of simple implementation)
 .claude/
 web-ui/

@@ -1,0 +1,176 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-{{TEST_TYPE}}-{{RPS}}rps
+  namespace: {{NAMESPACE}}
+  labels:
+    app: k6-load-test
+    test-type: "{{TEST_TYPE}}"
+    rps: "{{RPS}}"
+    version: "v2"
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{TTL_SECONDS}}
+  template:
+    metadata:
+      labels:
+        app: k6-load-test
+        test-type: "{{TEST_TYPE}}"
+        rps: "{{RPS}}"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{SERVICE_ACCOUNT}}
+      shareProcessNamespace: true
+      nodeSelector:
+        {{NODE_SELECTOR_KEY}}: {{NODE_SELECTOR_VALUE}}
+      tolerations:
+      - key: {{TOLERATION_KEY}}
+        operator: Equal
+        value: {{TOLERATION_VALUE}}
+        effect: NoSchedule
+      containers:
+      - name: k6
+        image: grafana/k6:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting K6 {{TEST_TYPE}} test: {{RPS}} RPS"
+            echo "Test duration: ${DURATION}"
+            echo "Base URL: ${BASE_URL}"
+            echo "Test script: ${TEST_SCRIPT}"
+            echo ""
+
+            # Discover resources before test starts
+            echo "Discovering deployments and nodepools..."
+            /scripts/discover-resources.sh
+
+            # Calculate when to trigger metrics collection
+            # Parse duration (supports formats like "2m", "120s")
+            case "${DURATION}" in
+              *m)
+                MINUTES=$(echo "${DURATION}" | sed 's/m$//')
+                DURATION_SECONDS=$((MINUTES * 60))
+                ;;
+              *s)
+                DURATION_SECONDS=$(echo "${DURATION}" | sed 's/s$//')
+                ;;
+              *)
+                DURATION_SECONDS=120  # Default to 120 seconds
+                ;;
+            esac
+            METRICS_DELAY=$((DURATION_SECONDS - 10))
+
+            # Signal metrics collector when to start
+            if [ ${METRICS_DELAY} -gt 0 ]; then
+              (sleep ${METRICS_DELAY} && touch /shared/collect-metrics) &
+            else
+              # For very short tests, collect metrics immediately
+              touch /shared/collect-metrics &
+            fi
+
+            # Run k6 test with appropriate script
+            k6 run ${TEST_SCRIPT}
+
+            # Wait for metrics collection to complete
+            while [ ! -f /shared/metrics-done ]; do
+              sleep 1
+            done
+
+            echo ""
+            echo "=== Resource Metrics ==="
+            cat /shared/metrics.json
+            echo ""
+
+            # Save results if enabled
+            if [ "${SAVE_RESULTS}" = "true" ]; then
+              echo "Saving test results..."
+              k6 run --summary-export=/shared/summary.json ${TEST_SCRIPT} || true
+            fi
+        env:
+        - name: TEST_TYPE
+          value: "{{TEST_TYPE}}"
+        - name: TARGET_RPS
+          value: "{{RPS}}"
+        - name: DURATION
+          value: "{{DURATION}}"
+        - name: BASE_URL
+          value: "{{BASE_URL}}"
+        - name: TEST_SCRIPT
+          value: "{{TEST_SCRIPT}}"
+        - name: URL_DATA_PATH
+          value: "{{URL_DATA_PATH}}"
+        - name: NAMESPACE
+          value: "{{NAMESPACE}}"
+        - name: APP_LABEL
+          value: "{{APP_LABEL}}"
+        - name: SAVE_RESULTS
+          value: "{{SAVE_RESULTS}}"
+        # Scenario-specific parameters
+        - name: SPIKE_MULTIPLIER
+          value: "{{SPIKE_MULTIPLIER}}"
+        - name: SPIKE_DURATION
+          value: "{{SPIKE_DURATION}}"
+        - name: RAMP_UP_TIME
+          value: "{{RAMP_UP_TIME}}"
+        - name: SUSTAIN_TIME
+          value: "{{SUSTAIN_TIME}}"
+        - name: RAMP_DOWN_TIME
+          value: "{{RAMP_DOWN_TIME}}"
+        resources:
+          requests:
+            cpu: "{{CPU_REQUEST}}"
+            memory: "{{MEMORY_REQUEST}}"
+          limits:
+            cpu: "{{CPU_LIMIT}}"
+            memory: "{{MEMORY_LIMIT}}"
+        volumeMounts:
+        - name: k6-scripts
+          mountPath: /scripts
+        - name: k6-data
+          mountPath: /data
+        - name: shared
+          mountPath: /shared
+      - name: metrics-collector
+        image: alpine/k8s:1.28.0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Metrics collector waiting for signal..."
+
+            # Wait for signal to collect metrics
+            while [ ! -f /shared/collect-metrics ]; do
+              sleep 1
+            done
+
+            echo "Signal received, collecting metrics in 1 second..."
+            sleep 1
+
+            # Run metrics collection script
+            /scripts/collect-metrics.sh > /shared/metrics.json 2>&1
+
+            # Signal completion
+            touch /shared/metrics-done
+
+            echo "Metrics collection completed"
+        env:
+        - name: NAMESPACE
+          value: "{{NAMESPACE}}"
+        - name: APP_LABEL
+          value: "{{APP_LABEL}}"
+        volumeMounts:
+        - name: k6-scripts
+          mountPath: /scripts
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: k6-scripts
+        configMap:
+          name: k6-scripts-v2
+          defaultMode: 0755
+      - name: k6-data
+        configMap:
+          name: k6-urls-data
+      - name: shared
+        emptyDir: {}

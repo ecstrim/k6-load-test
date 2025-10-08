@@ -1,0 +1,124 @@
+# K6 Load Test Configuration v2.0
+# This file centralizes all configuration for K6 load tests
+
+# Kubernetes Configuration
+kubernetes:
+  namespace: prod
+  serviceAccountName: k6-test-runner
+
+  # Node scheduling
+  nodeSelector:
+    workload: k6
+
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: k6
+      effect: NoSchedule
+
+  # Resource limits for K6 pods
+  resources:
+    low:  # For tests <= 50 RPS
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+    medium:  # For tests 51-500 RPS
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+
+    high:  # For tests > 500 RPS
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+
+# Test Configuration
+test:
+  # Target application
+  target:
+    baseUrl: "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local"
+    appLabel: "my-app"
+    namespace: "prod"
+
+  # URLs for testing (can be overridden with custom file)
+  urlDataPath: "/data/urls-1.json"
+
+  # Default test parameters
+  defaults:
+    duration: "2m"
+    thresholds:
+      errorRate: 0.02  # Max 2% error rate
+      p95Latency: 2000  # Max 2000ms p95 latency
+
+  # Predefined RPS levels for stress tests
+  rpsLevels:
+    - 5
+    - 10
+    - 50
+    - 100
+    - 150
+    - 200
+    - 300
+    - 400
+    - 500
+    - 750
+    - 1000
+    - 1500
+
+# Test Scenarios
+scenarios:
+  stress:
+    description: "Constant RPS stress test"
+    enabled: true
+
+  spike:
+    description: "Sudden traffic spike test"
+    enabled: true
+    spikeMultiplier: 5  # Spike to 5x baseline RPS
+    spikeDuration: "30s"
+
+  soak:
+    description: "Sustained load over long period"
+    enabled: true
+    duration: "30m"
+
+  load:
+    description: "Gradual ramp up/down test"
+    enabled: true
+    rampUpTime: "5m"
+    sustainTime: "10m"
+    rampDownTime: "5m"
+
+# Metrics Collection
+metrics:
+  enabled: true
+  collectionWindow: 10  # Collect metrics in last 10 seconds of test
+  targets:
+    - deployment  # Target application deployment
+    - coredns
+    - ingressController
+    - nodepool
+
+# Results Storage
+results:
+  enabled: true
+  storage: configmap  # Options: configmap, pvc (future)
+  retention: 10  # Keep last 10 test results per RPS level
+  comparisonEnabled: true
+
+# Job Configuration
+job:
+  ttlSecondsAfterFinished: 600  # Auto-cleanup after 10 minutes
+  backoffLimit: 0  # No retries on failure
+  parallelism: 1
+  completions: 1

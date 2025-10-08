@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k6-test-runner
+  namespace: prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader
+  namespace: prod
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k6-metrics-reader-ingress-nginx
+  namespace: ingress-nginx
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader
+  namespace: prod
+subjects:
+- kind: ServiceAccount
+  name: k6-test-runner
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader-kube-system
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: k6-test-runner
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader-kube-system
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k6-metrics-reader-ingress-nginx
+  namespace: ingress-nginx
+subjects:
+- kind: ServiceAccount
+  name: k6-test-runner
+  namespace: prod
+roleRef:
+  kind: Role
+  name: k6-metrics-reader-ingress-nginx
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k6-node-metrics-reader
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k6-node-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: k6-test-runner
+  namespace: prod
+roleRef:
+  kind: ClusterRole
+  name: k6-node-metrics-reader
+  apiGroup: rbac.authorization.k8s.io
